@@ -86,6 +86,7 @@ machine_test_part49 <-
 machine_test_part50 <-
 
 
+#Standard Deviation of the machine tested parts. 
 machine_test_variation_standard_deviation <- sd(c(
   machine_test_part1, machine_test_part2, machine_test_part3, machine_test_part4, machine_test_part5,
   machine_test_part6, machine_test_part7, machine_test_part8, machine_test_part9, machine_test_part10,
@@ -98,3 +99,15 @@ machine_test_variation_standard_deviation <- sd(c(
   machine_test_part41, machine_test_part42, machine_test_part43, machine_test_part44, machine_test_part45,
   machine_test_part46, machine_test_part47, machine_test_part48, machine_test_part49, machine_test_part50
 ))
+
+
+
+Pm  <- (upper_specification_limit - lower_specification_limit) / (6 * machine_test_variation_standard_deviation)
+
+Pmk <- min(
+  (upper_specification_limit - machine_test_mean) / (3 * machine_test_variation_standard_deviation),
+  (machine_test_mean - LSL) / (3 * machine_test_variation_standard_deviation)
+)
+
+
+
