@@ -16,69 +16,69 @@
 
 
 #Enter the process name
-process_name <- NA
+process_name <- "Shaft Diameter - Machine Performance Study"
 
 #Enter the upper and lower limits for the entire process as specified in your control 
 #plan or customer requirements. 
-upper_specification_limit <- NA
-lower_specification_limit <- NA
-target_value <- NA
+upper_specification_limit <- 25.10
+lower_specification_limit <- 24.90
+target_value <- 25.00
 
 
 #machine variation test 
-machine_test_temperature <- NA
-machine_test_humidity <- NA
+machine_test_temperature <- 20.3  # degrees Celsius
+machine_test_humidity    <- 48.2  # percent relative humidity
 
-machine_test_part1  <- NA
-machine_test_part2  <- NA
-machine_test_part3  <- NA
-machine_test_part4  <- NA
-machine_test_part5  <- NA
-machine_test_part6  <- NA
-machine_test_part7  <- NA
-machine_test_part8  <- NA
-machine_test_part9  <- NA
-machine_test_part10 <- NA
-machine_test_part11 <- NA
-machine_test_part12 <- NA
-machine_test_part13 <- NA
-machine_test_part14 <- NA
-machine_test_part15 <- NA
-machine_test_part16 <- NA
-machine_test_part17 <- NA
-machine_test_part18 <- NA
-machine_test_part19 <- NA
-machine_test_part20 <- NA
-machine_test_part21 <- NA
-machine_test_part22 <- NA
-machine_test_part23 <- NA
-machine_test_part24 <- NA
-machine_test_part25 <- NA
-machine_test_part26 <- NA
-machine_test_part27 <- NA
-machine_test_part28 <- NA
-machine_test_part29 <- NA
-machine_test_part30 <- NA
-machine_test_part31 <- NA
-machine_test_part32 <- NA
-machine_test_part33 <- NA
-machine_test_part34 <- NA
-machine_test_part35 <- NA
-machine_test_part36 <- NA
-machine_test_part37 <- NA
-machine_test_part38 <- NA
-machine_test_part39 <- NA
-machine_test_part40 <- NA
-machine_test_part41 <- NA
-machine_test_part42 <- NA
-machine_test_part43 <- NA
-machine_test_part44 <- NA
-machine_test_part45 <- NA
-machine_test_part46 <- NA
-machine_test_part47 <- NA
-machine_test_part48 <- NA
-machine_test_part49 <- NA
-machine_test_part50 <- NA
+machine_test_part1  <- 25.01
+machine_test_part2  <- 24.98
+machine_test_part3  <- 25.02
+machine_test_part4  <- 25.00
+machine_test_part5  <- 24.99
+machine_test_part6  <- 25.03
+machine_test_part7  <- 24.97
+machine_test_part8  <- 25.01
+machine_test_part9  <- 25.04
+machine_test_part10 <- 24.98
+machine_test_part11 <- 25.02
+machine_test_part12 <- 25.00
+machine_test_part13 <- 24.99
+machine_test_part14 <- 25.01
+machine_test_part15 <- 24.96
+machine_test_part16 <- 25.03
+machine_test_part17 <- 25.00
+machine_test_part18 <- 24.98
+machine_test_part19 <- 25.02
+machine_test_part20 <- 25.01
+machine_test_part21 <- 24.99
+machine_test_part22 <- 25.03
+machine_test_part23 <- 24.97
+machine_test_part24 <- 25.00
+machine_test_part25 <- 25.02
+machine_test_part26 <- 24.98
+machine_test_part27 <- 25.01
+machine_test_part28 <- 25.03
+machine_test_part29 <- 24.99
+machine_test_part30 <- 25.00
+machine_test_part31 <- 25.02
+machine_test_part32 <- 24.97
+machine_test_part33 <- 25.01
+machine_test_part34 <- 24.99
+machine_test_part35 <- 25.03
+machine_test_part36 <- 25.00
+machine_test_part37 <- 24.98
+machine_test_part38 <- 25.02
+machine_test_part39 <- 25.01
+machine_test_part40 <- 24.99
+machine_test_part41 <- 25.00
+machine_test_part42 <- 25.03
+machine_test_part43 <- 24.98
+machine_test_part44 <- 25.01
+machine_test_part45 <- 24.97
+machine_test_part46 <- 25.02
+machine_test_part47 <- 25.00
+machine_test_part48 <- 24.99
+machine_test_part49 <- 25.01
+machine_test_part50 <- 25.02
 
 
 #Standard deviation of the machine tested parts.
@@ -123,3 +123,19 @@ Pmk <- min(
   (upper_specification_limit - machine_test_mean) / (3 * machine_test_variation_standard_deviation),
   (machine_test_mean - lower_specification_limit) / (3 * machine_test_variation_standard_deviation)
 )
+
+
+#Acceptance threshold check.
+#Default threshold is 1.67 per AIAG/VDA SPC Yellow Volume.
+#Some customers require 2.00. Confirm against your customer PPAP requirements.
+acceptance_threshold <- 1.67
+
+Pm_pass  <- Pm  >= acceptance_threshold
+Pmk_pass <- Pmk >= acceptance_threshold
+
+#Results summary
+cat("Process:", process_name, "\n")
+cat("Mean:   ", round(machine_test_mean, 4), "mm\n")
+cat("Std Dev:", round(machine_test_variation_standard_deviation, 4), "mm\n")
+cat("Pm: ",  round(Pm,  3), "-", ifelse(Pm_pass,  "PASS", "FAIL"), "\n")
+cat("Pmk:", round(Pmk, 3), "-", ifelse(Pmk_pass, "PASS", "FAIL"), "\n")
