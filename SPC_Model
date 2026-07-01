@@ -139,3 +139,4 @@ cat("Mean:   ", round(machine_test_mean, 4), "mm\n")
 cat("Std Dev:", round(machine_test_variation_standard_deviation, 4), "mm\n")
 cat("Pm: ",  round(Pm,  3), "-", ifelse(Pm_pass,  "PASS", "FAIL"), "\n")
 cat("Pmk:", round(Pmk, 3), "-", ifelse(Pmk_pass, "PASS", "FAIL"), "\n")
+
