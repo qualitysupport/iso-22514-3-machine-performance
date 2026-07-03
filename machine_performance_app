@@ -1,0 +1,293 @@
+# =============================================================================
+# MACHINE PERFORMANCE STUDY - SHINY APP
+# Author: Dan Lay Jr. | Calibration Support LLC
+# License: MIT
+# Requires: shiny only
+# =============================================================================
+
+library(shiny)
+
+ui <- fluidPage(
+  
+  titlePanel("Machine Performance Study"),
+  
+  sidebarLayout(
+    
+    sidebarPanel(
+      width = 3,
+      
+      textInput("process_name", "Process Name",
+                value = "Shaft Diameter - Machine Performance Study"),
+      
+      hr(),
+      strong("Specification Limits"),
+      numericInput("usl",    "Upper Spec Limit (USL)", value = 25.10, step = 0.01),
+      numericInput("lsl",    "Lower Spec Limit (LSL)", value = 24.90, step = 0.01),
+      numericInput("target", "Target Value",            value = 25.00, step = 0.01),
+      
+      hr(),
+      strong("Environment"),
+      numericInput("temperature", "Temperature (°C)", value = 20.3, step = 0.1),
+      numericInput("humidity",    "Humidity (%RH)",   value = 48.2, step = 0.1),
+      
+      hr(),
+      strong("Acceptance Threshold"),
+      numericInput("threshold", "Min Pm / Pmk", value = 1.67, step = 0.01),
+      tags$p("Default 1.67. Some customers require 2.00.",
+             style = "font-size:0.75rem; color:grey;"),
+      
+      hr(),
+      strong("Part Measurements"),
+      tags$p("Paste comma-separated values (up to 50):",
+             style = "font-size:0.8rem; color:grey; margin-bottom:4px;"),
+      textAreaInput("part_data", label = NULL, rows = 6,
+                    value = "25.01,24.98,25.02,25.00,24.99,25.03,24.97,25.01,25.04,24.98,25.02,25.00,24.99,25.01,24.96,25.03,25.00,24.98,25.02,25.01,24.99,25.03,24.97,25.00,25.02,24.98,25.01,25.03,24.99,25.00,25.02,24.97,25.01,24.99,25.03,25.00,24.98,25.02,25.01,24.99,25.00,25.03,24.98,25.01,24.97,25.02,25.00,24.99,25.01,25.02"),
+      textOutput("part_count_label"),
+      
+      br(),
+      actionButton("run", "Calculate", class = "btn-primary", width = "100%"),
+      
+      hr(),
+      strong("Save / Load"),
+      br(), br(),
+      downloadButton("save_json", "Save as JSON", style = "width:100%;"),
+      br(), br(),
+      fileInput("load_json", "Upload JSON", accept = ".json",
+                placeholder = "No file selected"),
+      tags$p("Save your study inputs to JSON and reload them later.",
+             style = "font-size:0.75rem; color:grey;")
+    ),
+    
+    mainPanel(
+      width = 9,
+      
+      tableOutput("results_table"),
+      
+      hr(),
+      
+      fluidRow(
+        column(6, plotOutput("histogram", height = "320px")),
+        column(6, plotOutput("runchart",  height = "320px"))
+      ),
+      
+      hr(),
+      
+      strong("Interpretation"),
+      uiOutput("interpretation"),
+      
+      br(),
+      tags$p("Sample standard deviation (n-1) used.",
+             style = "font-size:0.75rem; color:grey;")
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  
+  # Parse part data
+  parts <- reactive({
+    req(input$part_data)
+    vals <- suppressWarnings(
+      as.numeric(unlist(strsplit(trimws(input$part_data), "[,\\s]+")))
+    )
+    vals[!is.na(vals)]
+  })
+  
+  # Part count label
+  output$part_count_label <- renderText({
+    paste0(length(parts()), " of 50 parts entered")
+  })
+  
+  # Calculations triggered by button
+  calcs <- eventReactive(input$run, {
+    p <- parts()
+    validate(need(length(p) >= 2, "Enter at least 2 part measurements to calculate."))
+    
+    usl <- input$usl
+    lsl <- input$lsl
+    thr <- input$threshold
+    
+    x_bar <- mean(p)
+    s     <- sd(p)
+    pm    <- (usl - lsl) / (6 * s)
+    pmk   <- min(
+      (usl - x_bar) / (3 * s),
+      (x_bar - lsl) / (3 * s)
+    )
+    
+    list(
+      parts    = p,
+      n        = length(p),
+      x_bar    = x_bar,
+      s        = s,
+      pm       = pm,
+      pmk      = pmk,
+      pm_pass  = pm  >= thr,
+      pmk_pass = pmk >= thr
+    )
+  }, ignoreNULL = FALSE)
+  
+  # Results summary table
+  output$results_table <- renderTable({
+    c <- calcs(); req(c)
+    data.frame(
+      Metric = c("Process", "n", "Mean", "Std Dev", "Pm", "Pmk",
+                 "Temperature", "Humidity"),
+      Value  = c(
+        input$process_name,
+        as.character(c$n),
+        round(c$x_bar, 4),
+        round(c$s,     4),
+        round(c$pm,    3),
+        round(c$pmk,   3),
+        paste0(input$temperature, " °C"),
+        paste0(input$humidity,    " %RH")
+      ),
+      Result = c(
+        "", "", "", "",
+        ifelse(c$pm_pass,  "PASS", "FAIL"),
+        ifelse(c$pmk_pass, "PASS", "FAIL"),
+        "", ""
+      )
+    )
+  }, striped = TRUE, bordered = TRUE, hover = TRUE)
+  
+  # Histogram
+  output$histogram <- renderPlot({
+    c <- calcs(); req(c)
+    p   <- c$parts
+    usl <- input$usl
+    lsl <- input$lsl
+    tgt <- input$target
+    pad <- (usl - lsl) * 0.15
+    
+    hist(p,
+         main  = "Distribution vs. Specification",
+         xlab  = "Measured Value",
+         ylab  = "Frequency",
+         col   = "steelblue",
+         border= "white",
+         xlim  = c(lsl - pad, usl + pad))
+    
+    abline(v = usl,     col = "red",       lwd = 2, lty = 2)
+    abline(v = lsl,     col = "red",       lwd = 2, lty = 2)
+    abline(v = c$x_bar, col = "black",     lwd = 2, lty = 1)
+    abline(v = tgt,     col = "darkgreen", lwd = 2, lty = 3)
+    
+    legend("topright",
+           legend = c("USL / LSL", "Mean", "Target"),
+           col    = c("red", "black", "darkgreen"),
+           lty    = c(2, 1, 3), lwd = 2, cex = 0.8)
+    
+    mtext(paste0("Pm = ", round(c$pm, 3), ifelse(c$pm_pass, " PASS", " FAIL"),
+                 "   Pmk = ", round(c$pmk, 3), ifelse(c$pmk_pass, " PASS", " FAIL")),
+          side = 3, line = 0.3, cex = 0.82)
+  })
+  
+  # Run chart
+  output$runchart <- renderPlot({
+    c <- calcs(); req(c)
+    p   <- c$parts
+    usl <- input$usl
+    lsl <- input$lsl
+    tgt <- input$target
+    pad <- (usl - lsl) * 0.15
+    
+    plot(seq_along(p), p,
+         type = "b", pch = 19, col = "steelblue",
+         main = "Run Chart — Parts in Sequence",
+         xlab = "Part Number",
+         ylab = "Measured Value",
+         ylim = c(lsl - pad, usl + pad))
+    
+    abline(h = usl,     col = "red",       lwd = 2, lty = 2)
+    abline(h = lsl,     col = "red",       lwd = 2, lty = 2)
+    abline(h = c$x_bar, col = "black",     lwd = 2, lty = 1)
+    abline(h = tgt,     col = "darkgreen", lwd = 2, lty = 3)
+    
+    legend("topright",
+           legend = c("USL / LSL", "Mean", "Target"),
+           col    = c("red", "black", "darkgreen"),
+           lty    = c(2, 1, 3), lwd = 2, cex = 0.8)
+    
+    mtext(paste0("Temp: ", input$temperature, "°C   RH: ", input$humidity, "%RH"),
+          side = 3, line = 0.3, cex = 0.82, col = "grey40")
+  })
+  
+  # Interpretation
+  output$interpretation <- renderUI({
+    c <- calcs(); req(c)
+    thr  <- input$threshold
+    bias <- round(c$x_bar - input$target, 4)
+    gap  <- round(c$pm - c$pmk, 4)
+    
+    if (c$pm_pass && c$pmk_pass) {
+      msg <- tags$p(style = "color:darkgreen;",
+                    paste0("Both Pm and Pmk meet the acceptance threshold of ", thr,
+                           ". Machine is accepted."))
+    } else if (c$pm_pass && !c$pmk_pass) {
+      msg <- tags$p(style = "color:darkorange;",
+                    paste0("Pm passes but Pmk fails. Spread is adequate but the mean is offset ",
+                           "from target by ", bias, " units. Investigate machine offset or zero ",
+                           "adjustment before re-running the study."))
+    } else {
+      msg <- tags$p(style = "color:red;",
+                    paste0("Both Pm and Pmk fail. Machine variation is too large for the tolerance ",
+                           "window. Investigate machine condition, tooling, fixturing, and ",
+                           "environmental factors."))
+    }
+    
+    tagList(
+      msg,
+      tags$p(style = "color:grey; font-size:0.82rem;",
+             paste0("Pm vs Pmk gap: ", gap, ". A larger gap indicates greater mean shift ",
+                    "from target. A gap near zero means the process is well centered."))
+    )
+  })
+  
+  # =============================================================================
+  # SAVE AS JSON
+  # =============================================================================
+  output$save_json <- downloadHandler(
+    filename = function() {
+      paste0(gsub("[^a-zA-Z0-9]", "_", input$process_name), "_",
+             format(Sys.time(), "%Y%m%d_%H%M%S"), ".json")
+    },
+    content = function(file) {
+      study <- list(
+        process_name  = input$process_name,
+        usl           = input$usl,
+        lsl           = input$lsl,
+        target        = input$target,
+        temperature   = input$temperature,
+        humidity      = input$humidity,
+        threshold     = input$threshold,
+        part_data     = input$part_data,
+        saved_at      = format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+      )
+      writeLines(jsonlite::toJSON(study, pretty = TRUE, auto_unbox = TRUE), file)
+    }
+  )
+  
+  # =============================================================================
+  # LOAD FROM JSON
+  # =============================================================================
+  observeEvent(input$load_json, {
+    req(input$load_json)
+    tryCatch({
+      study <- jsonlite::fromJSON(input$load_json$datapath)
+      updateTextInput(session,    "process_name", value = study$process_name)
+      updateNumericInput(session, "usl",          value = study$usl)
+      updateNumericInput(session, "lsl",          value = study$lsl)
+      updateNumericInput(session, "target",       value = study$target)
+      updateNumericInput(session, "temperature",  value = study$temperature)
+      updateNumericInput(session, "humidity",     value = study$humidity)
+      updateNumericInput(session, "threshold",    value = study$threshold)
+      updateTextAreaInput(session,"part_data",    value = study$part_data)
+    }, error = function(e) {
+      showNotification("Failed to load JSON. Check the file format.", type = "error")
+    })
+  })
+}
+
+shinyApp(ui, server)
