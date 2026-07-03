@@ -2,89 +2,435 @@
 # MACHINE PERFORMANCE STUDY - SHINY APP
 # Author: Dan Lay Jr. | Calibration Support LLC
 # License: MIT
-# Requires: shiny only
+# Requires: shiny, jsonlite
 # =============================================================================
 
 library(shiny)
 
+# =============================================================================
+# STYLES
+# =============================================================================
+
+css <- "
+  body {
+    background-color: #f5f5f5;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    color: #1a1a1a;
+  }
+
+  .title-bar {
+    background-color: #111111;
+    color: white;
+    padding: 16px 24px;
+    margin-bottom: 0;
+  }
+
+  .title-bar h2 {
+    margin: 0;
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: white;
+    letter-spacing: 0.04em;
+  }
+
+  .title-bar p {
+    margin: 2px 0 0 0;
+    font-size: 0.78rem;
+    color: #999999;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .sidebar-panel {
+    background-color: #111111;
+    color: #e0e0e0;
+    padding: 20px 16px;
+    border-radius: 0;
+    min-height: 100vh;
+  }
+
+  .sidebar-panel label {
+    color: #999999;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 3px;
+  }
+
+  .sidebar-panel .form-control {
+    background-color: #222222;
+    border: 1px solid #333333;
+    color: #e0e0e0;
+    border-radius: 4px;
+    font-size: 0.88rem;
+  }
+
+  .sidebar-panel .form-control:focus {
+    background-color: #2a2a2a;
+    border-color: #666666;
+    color: white;
+    box-shadow: 0 0 0 2px rgba(255,255,255,0.1);
+  }
+
+  .sidebar-section {
+    margin-bottom: 16px;
+  }
+
+  .sidebar-section-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #ffffff;
+    font-weight: 700;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #333333;
+    padding-bottom: 5px;
+  }
+
+  .sidebar-panel hr {
+    border-color: #333333;
+    margin: 14px 0;
+  }
+
+  .sidebar-panel .btn-primary {
+    background-color: #ffffff;
+    border-color: #ffffff;
+    color: #111111;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-size: 0.82rem;
+    padding: 8px;
+    width: 100%;
+  }
+
+  .sidebar-panel .btn-primary:hover {
+    background-color: #dddddd;
+    border-color: #dddddd;
+    color: #111111;
+  }
+
+  .sidebar-panel .btn-default {
+    background-color: #222222;
+    border-color: #444444;
+    color: #cccccc;
+    font-size: 0.78rem;
+    width: 100%;
+    margin-bottom: 8px;
+  }
+
+  .sidebar-panel .btn-default:hover {
+    background-color: #333333;
+    color: #ffffff;
+  }
+
+  .sidebar-hint {
+    font-size: 0.7rem;
+    color: #777777;
+    margin-top: 4px;
+    line-height: 1.4;
+  }
+
+  .main-panel {
+    padding: 20px 24px;
+  }
+
+  /* Result Cards */
+  .result-cards {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  .result-card {
+    flex: 1;
+    min-width: 140px;
+    background: white;
+    border-radius: 6px;
+    padding: 16px 18px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.10);
+    border-top: 4px solid #111111;
+  }
+
+  .result-card.pass {
+    border-top-color: #1a7a3a;
+  }
+
+  .result-card.fail {
+    border-top-color: #c0392b;
+  }
+
+  .result-card.neutral {
+    border-top-color: #555555;
+  }
+
+  .result-card .card-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #777777;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  .result-card .card-value {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #111111;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .result-card .card-badge {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .badge-pass {
+    background-color: #e6f4ec;
+    color: #1a7a3a;
+  }
+
+  .badge-fail {
+    background-color: #fdecea;
+    color: #c0392b;
+  }
+
+  .badge-neutral {
+    background-color: #eeeeee;
+    color: #555555;
+  }
+
+  /* Info bar */
+  .info-bar {
+    background: white;
+    border-radius: 6px;
+    padding: 10px 18px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+    align-items: center;
+    border-left: 4px solid #111111;
+  }
+
+  .info-bar-item .info-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #999999;
+    font-weight: 700;
+  }
+
+  .info-bar-item .info-value {
+    font-size: 0.88rem;
+    color: #111111;
+    font-weight: 600;
+  }
+
+  /* Plot cards */
+  .plot-card {
+    background: white;
+    border-radius: 6px;
+    padding: 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.10);
+    margin-bottom: 20px;
+  }
+
+  .plot-card-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #777777;
+    font-weight: 700;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eeeeee;
+  }
+
+  /* Interpretation card */
+  .interp-card {
+    background: white;
+    border-radius: 6px;
+    padding: 18px 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.10);
+    margin-bottom: 20px;
+  }
+
+  .interp-card-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #777777;
+    font-weight: 700;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eeeeee;
+  }
+
+  .interp-pass  { color: #1a7a3a; font-weight: 600; }
+  .interp-warn  { color: #c07020; font-weight: 600; }
+  .interp-fail  { color: #c0392b; font-weight: 600; }
+  .interp-meta  { color: #999999; font-size: 0.82rem; margin-top: 8px; }
+
+  .plot-legend {
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    padding-top: 10px;
+    margin-top: 6px;
+    border-top: 1px solid #eeeeee;
+    font-size: 0.75rem;
+    color: #555555;
+  }
+
+  .plot-legend .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .legend-line {
+    display: inline-block;
+    width: 26px;
+    height: 0;
+    border-top-width: 2.5px;
+  }
+
+  .legend-spec   { border-top-style: dashed; border-top-color: #c0392b; }
+  .legend-mean   { border-top-style: solid;  border-top-color: #111111; }
+  .legend-target { border-top-style: dotted; border-top-color: #1a7a3a; }
+
+  .sidebar-panel .btn-file {
+    background-color: #222222;
+    border-color: #444444;
+    color: #cccccc;
+    font-size: 0.78rem;
+  }
+"
+
+# =============================================================================
+# UI
+# =============================================================================
+
 ui <- fluidPage(
   
-  titlePanel("Machine Performance Study"),
+  tags$head(tags$style(HTML(css))),
   
-  sidebarLayout(
+  tags$div(class = "title-bar",
+           tags$h2("Machine Performance Study"),
+           tags$p("Calibration Support LLC")
+  ),
+  
+  fluidRow(
     
-    sidebarPanel(
-      width = 3,
-      
-      textInput("process_name", "Process Name",
-                value = "Shaft Diameter - Machine Performance Study"),
-      
-      hr(),
-      strong("Specification Limits"),
-      numericInput("usl",    "Upper Spec Limit (USL)", value = 25.10, step = 0.01),
-      numericInput("lsl",    "Lower Spec Limit (LSL)", value = 24.90, step = 0.01),
-      numericInput("target", "Target Value",            value = 25.00, step = 0.01),
-      
-      hr(),
-      strong("Environment"),
-      numericInput("temperature", "Temperature (°C)", value = 20.3, step = 0.1),
-      numericInput("humidity",    "Humidity (%RH)",   value = 48.2, step = 0.1),
-      
-      hr(),
-      strong("Acceptance Threshold"),
-      numericInput("threshold", "Min Pm / Pmk", value = 1.67, step = 0.01),
-      tags$p("Default 1.67. Some customers require 2.00.",
-             style = "font-size:0.75rem; color:grey;"),
-      
-      hr(),
-      strong("Part Measurements"),
-      tags$p("Paste comma-separated values (up to 50):",
-             style = "font-size:0.8rem; color:grey; margin-bottom:4px;"),
-      textAreaInput("part_data", label = NULL, rows = 6,
-                    value = "25.01,24.98,25.02,25.00,24.99,25.03,24.97,25.01,25.04,24.98,25.02,25.00,24.99,25.01,24.96,25.03,25.00,24.98,25.02,25.01,24.99,25.03,24.97,25.00,25.02,24.98,25.01,25.03,24.99,25.00,25.02,24.97,25.01,24.99,25.03,25.00,24.98,25.02,25.01,24.99,25.00,25.03,24.98,25.01,24.97,25.02,25.00,24.99,25.01,25.02"),
-      textOutput("part_count_label"),
-      
-      br(),
-      actionButton("run", "Calculate", class = "btn-primary", width = "100%"),
-      
-      hr(),
-      strong("Save / Load"),
-      br(), br(),
-      downloadButton("save_json", "Save as JSON", style = "width:100%;"),
-      br(), br(),
-      fileInput("load_json", "Upload JSON", accept = ".json",
-                placeholder = "No file selected"),
-      tags$p("Save your study inputs to JSON and reload them later.",
-             style = "font-size:0.75rem; color:grey;")
+    # Sidebar
+    column(3,
+           tags$div(class = "sidebar-panel",
+                    
+                    tags$div(class = "sidebar-section",
+                             tags$div(class = "sidebar-section-label", "Study Setup"),
+                             textInput("process_name", "Process Name",
+                                       value = "Shaft Diameter - Machine Performance Study")
+                    ),
+                    
+                    tags$div(class = "sidebar-section",
+                             tags$div(class = "sidebar-section-label", "Specification Limits"),
+                             numericInput("usl",    "Upper Spec Limit (USL)", value = 25.10, step = 0.01),
+                             numericInput("lsl",    "Lower Spec Limit (LSL)", value = 24.90, step = 0.01),
+                             numericInput("target", "Target Value",            value = 25.00, step = 0.01)
+                    ),
+                    
+                    tags$div(class = "sidebar-section",
+                             tags$div(class = "sidebar-section-label", "Environment"),
+                             numericInput("temperature", "Temperature (°C)", value = 20.3, step = 0.1),
+                             numericInput("humidity",    "Humidity (%RH)",   value = 48.2, step = 0.1)
+                    ),
+                    
+                    tags$div(class = "sidebar-section",
+                             tags$div(class = "sidebar-section-label", "Acceptance Threshold"),
+                             numericInput("threshold", "Min Pm / Pmk", value = 1.67, step = 0.01),
+                             tags$p("Default 1.67. Some customers require 2.00.", class = "sidebar-hint")
+                    ),
+                    
+                    tags$div(class = "sidebar-section",
+                             tags$div(class = "sidebar-section-label", "Part Measurements"),
+                             tags$p("Paste comma-separated values (up to 50):", class = "sidebar-hint"),
+                             textAreaInput("part_data", label = NULL, rows = 6,
+                                           value = "25.01,24.98,25.02,25.00,24.99,25.03,24.97,25.01,25.04,24.98,25.02,25.00,24.99,25.01,24.96,25.03,25.00,24.98,25.02,25.01,24.99,25.03,24.97,25.00,25.02,24.98,25.01,25.03,24.99,25.00,25.02,24.97,25.01,24.99,25.03,25.00,24.98,25.02,25.01,24.99,25.00,25.03,24.98,25.01,24.97,25.02,25.00,24.99,25.01,25.02"),
+                             tags$p(textOutput("part_count_label"), class = "sidebar-hint")
+                    ),
+                    
+                    actionButton("run", "Calculate", class = "btn-primary"),
+                    
+                    hr(),
+                    
+                    tags$div(class = "sidebar-section",
+                             tags$div(class = "sidebar-section-label", "Save / Load"),
+                             downloadButton("save_json", "Save as JSON", class = "btn-default"),
+                             fileInput("load_json", NULL, accept = ".json",
+                                       placeholder = "Upload JSON",
+                                       buttonLabel = "Upload JSON"),
+                             tags$p("Save inputs to JSON and reload later.", class = "sidebar-hint")
+                    )
+           )
     ),
     
-    mainPanel(
-      width = 9,
-      
-      tableOutput("results_table"),
-      
-      hr(),
-      
-      fluidRow(
-        column(6, plotOutput("histogram", height = "320px")),
-        column(6, plotOutput("runchart",  height = "320px"))
-      ),
-      
-      hr(),
-      
-      strong("Interpretation"),
-      uiOutput("interpretation"),
-      
-      br(),
-      tags$p("Sample standard deviation (n-1) used.",
-             style = "font-size:0.75rem; color:grey;")
+    # Main panel
+    column(9,
+           tags$div(class = "main-panel",
+                    
+                    uiOutput("result_cards"),
+                    uiOutput("info_bar"),
+                    
+                    fluidRow(
+                      column(6,
+                             tags$div(class = "plot-card",
+                                      tags$div(class = "plot-card-title", "Distribution vs. Specification"),
+                                      plotOutput("histogram", height = "300px"),
+                                      tags$div(class = "plot-legend",
+                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-spec"),   "USL / LSL"),
+                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-mean"),   "Mean"),
+                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-target"), "Target")
+                                      )
+                             )
+                      ),
+                      column(6,
+                             tags$div(class = "plot-card",
+                                      tags$div(class = "plot-card-title", "Run Chart — Parts in Sequence"),
+                                      plotOutput("runchart", height = "300px"),
+                                      tags$div(class = "plot-legend",
+                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-spec"),   "USL / LSL"),
+                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-mean"),   "Mean"),
+                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-target"), "Target")
+                                      )
+                             )
+                      )
+                    ),
+                    
+                    tags$div(class = "interp-card",
+                             tags$div(class = "interp-card-title", "Interpretation"),
+                             uiOutput("interpretation")
+                    )
+           )
     )
   )
 )
 
+# =============================================================================
+# SERVER
+# =============================================================================
+
 server <- function(input, output, session) {
   
-  # Parse part data
   parts <- reactive({
     req(input$part_data)
     vals <- suppressWarnings(
@@ -93,20 +439,16 @@ server <- function(input, output, session) {
     vals[!is.na(vals)]
   })
   
-  # Part count label
   output$part_count_label <- renderText({
     paste0(length(parts()), " of 50 parts entered")
   })
   
-  # Calculations triggered by button
   calcs <- eventReactive(input$run, {
     p <- parts()
-    validate(need(length(p) >= 2, "Enter at least 2 part measurements to calculate."))
-    
-    usl <- input$usl
-    lsl <- input$lsl
-    thr <- input$threshold
-    
+    shiny::validate(shiny::need(length(p) >= 2, "Enter at least 2 part measurements to calculate."))
+    usl   <- input$usl
+    lsl   <- input$lsl
+    thr   <- input$threshold
     x_bar <- mean(p)
     s     <- sd(p)
     pm    <- (usl - lsl) / (6 * s)
@@ -114,45 +456,60 @@ server <- function(input, output, session) {
       (usl - x_bar) / (3 * s),
       (x_bar - lsl) / (3 * s)
     )
-    
-    list(
-      parts    = p,
-      n        = length(p),
-      x_bar    = x_bar,
-      s        = s,
-      pm       = pm,
-      pmk      = pmk,
-      pm_pass  = pm  >= thr,
-      pmk_pass = pmk >= thr
-    )
+    list(parts = p, n = length(p), x_bar = x_bar, s = s,
+         pm = pm, pmk = pmk,
+         pm_pass = pm >= thr, pmk_pass = pmk >= thr)
   }, ignoreNULL = FALSE)
   
-  # Results summary table
-  output$results_table <- renderTable({
+  # Result cards
+  output$result_cards <- renderUI({
     c <- calcs(); req(c)
-    data.frame(
-      Metric = c("Process", "n", "Mean", "Std Dev", "Pm", "Pmk",
-                 "Temperature", "Humidity"),
-      Value  = c(
-        input$process_name,
-        as.character(c$n),
-        round(c$x_bar, 4),
-        round(c$s,     4),
-        round(c$pm,    3),
-        round(c$pmk,   3),
-        paste0(input$temperature, " °C"),
-        paste0(input$humidity,    " %RH")
-      ),
-      Result = c(
-        "", "", "", "",
-        ifelse(c$pm_pass,  "PASS", "FAIL"),
-        ifelse(c$pmk_pass, "PASS", "FAIL"),
-        "", ""
+    
+    make_card <- function(label, value, badge_text = NULL, card_class = "neutral") {
+      badge <- if (!is.null(badge_text)) {
+        badge_class <- if (card_class == "pass") "badge-pass" else if (card_class == "fail") "badge-fail" else "badge-neutral"
+        tags$div(class = paste("card-badge", badge_class), badge_text)
+      }
+      tags$div(class = paste("result-card", card_class),
+               tags$div(class = "card-label", label),
+               tags$div(class = "card-value", value),
+               badge
       )
+    }
+    
+    tags$div(class = "result-cards",
+             make_card("Pm",      round(c$pm,    3), ifelse(c$pm_pass,  "Pass", "Fail"), ifelse(c$pm_pass,  "pass", "fail")),
+             make_card("Pmk",     round(c$pmk,   3), ifelse(c$pmk_pass, "Pass", "Fail"), ifelse(c$pmk_pass, "pass", "fail")),
+             make_card("Mean",    round(c$x_bar, 4), NULL, "neutral"),
+             make_card("Std Dev", round(c$s,     4), NULL, "neutral"),
+             make_card("n",       c$n,               NULL, "neutral")
     )
-  }, striped = TRUE, bordered = TRUE, hover = TRUE)
+  })
+  
+  # Info bar
+  output$info_bar <- renderUI({
+    c <- calcs(); req(c)
+    
+    item <- function(label, value) {
+      tags$div(class = "info-bar-item",
+               tags$div(class = "info-label", label),
+               tags$div(class = "info-value", value)
+      )
+    }
+    
+    tags$div(class = "info-bar",
+             item("Process",     input$process_name),
+             item("USL",         input$usl),
+             item("LSL",         input$lsl),
+             item("Target",      input$target),
+             item("Temperature", paste0(input$temperature, " °C")),
+             item("Humidity",    paste0(input$humidity, " %RH"))
+    )
+  })
   
   # Histogram
+  # Legend is placed BELOW the plot area (outside), horizontal, so it never
+  # overlaps the data. Extra bottom margin reserved via par(mar).
   output$histogram <- renderPlot({
     c <- calcs(); req(c)
     p   <- c$parts
@@ -161,28 +518,23 @@ server <- function(input, output, session) {
     tgt <- input$target
     pad <- (usl - lsl) * 0.15
     
-    hist(p,
-         main  = "Distribution vs. Specification",
-         xlab  = "Measured Value",
-         ylab  = "Frequency",
-         col   = "steelblue",
-         border= "white",
-         xlim  = c(lsl - pad, usl + pad))
+    par(bg = "white", col.axis = "#555555", col.lab = "#111111",
+        col.main = "#111111", fg = "#555555",
+        mar = c(4, 4, 2, 2), family = "sans")
     
-    abline(v = usl,     col = "red",       lwd = 2, lty = 2)
-    abline(v = lsl,     col = "red",       lwd = 2, lty = 2)
-    abline(v = c$x_bar, col = "black",     lwd = 2, lty = 1)
-    abline(v = tgt,     col = "darkgreen", lwd = 2, lty = 3)
+    hist(p, main = NULL, xlab = "Measured Value", ylab = "Frequency",
+         col = "#d9d9d9", border = "#111111",
+         xlim = c(lsl - pad, usl + pad))
     
-    legend("topright",
-           legend = c("USL / LSL", "Mean", "Target"),
-           col    = c("red", "black", "darkgreen"),
-           lty    = c(2, 1, 3), lwd = 2, cex = 0.8)
+    abline(v = usl,     col = "#c0392b", lwd = 2, lty = 2)
+    abline(v = lsl,     col = "#c0392b", lwd = 2, lty = 2)
+    abline(v = c$x_bar, col = "#111111", lwd = 2, lty = 1)
+    abline(v = tgt,     col = "#1a7a3a", lwd = 2, lty = 3)
     
-    mtext(paste0("Pm = ", round(c$pm, 3), ifelse(c$pm_pass, " PASS", " FAIL"),
-                 "   Pmk = ", round(c$pmk, 3), ifelse(c$pmk_pass, " PASS", " FAIL")),
-          side = 3, line = 0.3, cex = 0.82)
-  })
+    mtext(paste0("Pm = ", round(c$pm, 3), ifelse(c$pm_pass, "  PASS", "  FAIL"),
+                 "     Pmk = ", round(c$pmk, 3), ifelse(c$pmk_pass, "  PASS", "  FAIL")),
+          side = 3, line = 0.3, cex = 0.78, col = "#555555")
+  }, bg = "white")
   
   # Run chart
   output$runchart <- renderPlot({
@@ -193,61 +545,52 @@ server <- function(input, output, session) {
     tgt <- input$target
     pad <- (usl - lsl) * 0.15
     
-    plot(seq_along(p), p,
-         type = "b", pch = 19, col = "steelblue",
-         main = "Run Chart — Parts in Sequence",
-         xlab = "Part Number",
-         ylab = "Measured Value",
+    par(bg = "white", col.axis = "#555555", col.lab = "#111111",
+        col.main = "#111111", fg = "#555555",
+        mar = c(4, 4, 2, 2), family = "sans")
+    
+    plot(seq_along(p), p, type = "b", pch = 19, col = "#111111",
+         main = NULL, xlab = "Part Number", ylab = "Measured Value",
          ylim = c(lsl - pad, usl + pad))
     
-    abline(h = usl,     col = "red",       lwd = 2, lty = 2)
-    abline(h = lsl,     col = "red",       lwd = 2, lty = 2)
-    abline(h = c$x_bar, col = "black",     lwd = 2, lty = 1)
-    abline(h = tgt,     col = "darkgreen", lwd = 2, lty = 3)
-    
-    legend("topright",
-           legend = c("USL / LSL", "Mean", "Target"),
-           col    = c("red", "black", "darkgreen"),
-           lty    = c(2, 1, 3), lwd = 2, cex = 0.8)
+    abline(h = usl,     col = "#c0392b", lwd = 2, lty = 2)
+    abline(h = lsl,     col = "#c0392b", lwd = 2, lty = 2)
+    abline(h = c$x_bar, col = "#666666", lwd = 2, lty = 1)
+    abline(h = tgt,     col = "#1a7a3a", lwd = 2, lty = 3)
     
     mtext(paste0("Temp: ", input$temperature, "°C   RH: ", input$humidity, "%RH"),
-          side = 3, line = 0.3, cex = 0.82, col = "grey40")
-  })
+          side = 3, line = 0.3, cex = 0.78, col = "#999999")
+  }, bg = "white")
   
   # Interpretation
   output$interpretation <- renderUI({
     c <- calcs(); req(c)
-    thr  <- input$threshold
     bias <- round(c$x_bar - input$target, 4)
     gap  <- round(c$pm - c$pmk, 4)
     
     if (c$pm_pass && c$pmk_pass) {
-      msg <- tags$p(style = "color:darkgreen;",
-                    paste0("Both Pm and Pmk meet the acceptance threshold of ", thr,
+      msg <- tags$p(class = "interp-pass",
+                    paste0("Both Pm and Pmk meet the acceptance threshold of ", input$threshold,
                            ". Machine is accepted."))
     } else if (c$pm_pass && !c$pmk_pass) {
-      msg <- tags$p(style = "color:darkorange;",
-                    paste0("Pm passes but Pmk fails. Spread is adequate but the mean is offset ",
-                           "from target by ", bias, " units. Investigate machine offset or zero ",
-                           "adjustment before re-running the study."))
+      msg <- tags$p(class = "interp-warn",
+                    paste0("Pm passes but Pmk fails. Spread is adequate but the mean is offset from target by ",
+                           bias, " units. Investigate machine offset or zero adjustment before re-running the study."))
     } else {
-      msg <- tags$p(style = "color:red;",
-                    paste0("Both Pm and Pmk fail. Machine variation is too large for the tolerance ",
-                           "window. Investigate machine condition, tooling, fixturing, and ",
-                           "environmental factors."))
+      msg <- tags$p(class = "interp-fail",
+                    paste0("Both Pm and Pmk fail. Machine variation is too large for the tolerance window. ",
+                           "Investigate machine condition, tooling, fixturing, and environmental factors."))
     }
     
     tagList(
       msg,
-      tags$p(style = "color:grey; font-size:0.82rem;",
-             paste0("Pm vs Pmk gap: ", gap, ". A larger gap indicates greater mean shift ",
-                    "from target. A gap near zero means the process is well centered."))
+      tags$p(class = "interp-meta",
+             paste0("Pm vs Pmk gap: ", gap, ". A larger gap indicates greater mean shift from target. ",
+                    "A gap near zero means the process is well centered."))
     )
   })
   
-  # =============================================================================
-  # SAVE AS JSON
-  # =============================================================================
+  # Save JSON
   output$save_json <- downloadHandler(
     filename = function() {
       paste0(gsub("[^a-zA-Z0-9]", "_", input$process_name), "_",
@@ -255,23 +598,21 @@ server <- function(input, output, session) {
     },
     content = function(file) {
       study <- list(
-        process_name  = input$process_name,
-        usl           = input$usl,
-        lsl           = input$lsl,
-        target        = input$target,
-        temperature   = input$temperature,
-        humidity      = input$humidity,
-        threshold     = input$threshold,
-        part_data     = input$part_data,
-        saved_at      = format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+        process_name = input$process_name,
+        usl          = input$usl,
+        lsl          = input$lsl,
+        target       = input$target,
+        temperature  = input$temperature,
+        humidity     = input$humidity,
+        threshold    = input$threshold,
+        part_data    = input$part_data,
+        saved_at     = format(Sys.time(), "%Y-%m-%d %H:%M:%S")
       )
-      writeLines(jsonlite::toJSON(study, pretty = TRUE, auto_unbox = TRUE), file)
+      jsonlite::write_json(study, file, pretty = TRUE, auto_unbox = TRUE)
     }
   )
   
-  # =============================================================================
-  # LOAD FROM JSON
-  # =============================================================================
+  # Load JSON
   observeEvent(input$load_json, {
     req(input$load_json)
     tryCatch({
