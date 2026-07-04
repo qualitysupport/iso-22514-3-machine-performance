@@ -1,634 +1,548 @@
-# =============================================================================
-# MACHINE PERFORMANCE STUDY - SHINY APP
-# Author: Dan Lay Jr. | Calibration Support LLC
-# License: MIT
-# Requires: shiny, jsonlite
-# =============================================================================
+########################################################################
+# ISO 22514-3:2020 — Machine Performance Study Shiny App
+#
+# Implements the procedure described in ISO 22514-3:2020(E):
+#   Statistical methods in process management — Capability and
+#   performance — Part 3: Machine performance studies for measured
+#   data on discrete parts.
+#
+# Covers:
+#   Clause 5  - Pre-condition checks (n >= 30, warning if n < 100)
+#   Clause 6  - Data collection / traceability
+#   Clause 7.2 - Run chart
+#   Clause 7.3 - Histogram / tally chart, pattern check
+#   Clause 7.4 - Probability plot (+ normality test)
+#   Clause 7.5 - Special cases (skew / bimodal) flagged, percentile method
+#   Clause 7.6 - Machine performance indices (Pm, PmkU, PmkL, Pmk)
+#   Clause 8   - Reporting, confidence intervals, proportion out of spec
+#
+# Required packages: shiny, ggplot2, DT
+########################################################################
 
 library(shiny)
+library(ggplot2)
+library(DT)
 
-# =============================================================================
-# STYLES
-# =============================================================================
+# ---------------------------------------------------------------------
+# Helper functions implementing the formulas from the standard
+# ---------------------------------------------------------------------
 
-css <- "
-  body {
-    background-color: #f5f5f5;
-    font-family: 'Segoe UI', Arial, sans-serif;
-    color: #1a1a1a;
+# 7.6.2 Normal-distribution index formulas
+calc_indices_normal <- function(xbar, s, LSL, USL) {
+  Pm    <- NA_real_
+  PmkU  <- NA_real_
+  PmkL  <- NA_real_
+  
+  if (!is.na(LSL) && !is.na(USL)) {
+    Pm <- (USL - LSL) / (6 * s)
   }
-
-  .title-bar {
-    background-color: #111111;
-    color: white;
-    padding: 16px 24px;
-    margin-bottom: 0;
+  if (!is.na(USL)) {
+    PmkU <- (USL - xbar) / (3 * s)
   }
-
-  .title-bar h2 {
-    margin: 0;
-    font-size: 1.4rem;
-    font-weight: 600;
-    color: white;
-    letter-spacing: 0.04em;
+  if (!is.na(LSL)) {
+    PmkL <- (xbar - LSL) / (3 * s)
   }
+  Pmk <- suppressWarnings(min(c(PmkU, PmkL), na.rm = TRUE))
+  if (is.infinite(Pmk)) Pmk <- NA_real_
+  
+  list(Pm = Pm, PmkU = PmkU, PmkL = PmkL, Pmk = Pmk)
+}
 
-  .title-bar p {
-    margin: 2px 0 0 0;
-    font-size: 0.78rem;
-    color: #999999;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+# 7.6.1 Percentile-based index formulas (for non-normal / skewed / bimodal data)
+# Uses empirical percentiles X0.135%, X50%, X99.865% as estimators of the
+# corresponding distribution percentiles referenced in 7.5.1 / 7.5.2.
+calc_indices_percentile <- function(x, LSL, USL) {
+  q <- quantile(x, probs = c(0.00135, 0.5, 0.99865), type = 6, na.rm = TRUE)
+  X0135  <- unname(q[1])
+  X50    <- unname(q[2])
+  X99865 <- unname(q[3])
+  
+  Pm   <- NA_real_
+  PmkU <- NA_real_
+  PmkL <- NA_real_
+  
+  if (!is.na(LSL) && !is.na(USL)) {
+    Pm <- (USL - LSL) / (X99865 - X0135)
   }
-
-  .sidebar-panel {
-    background-color: #111111;
-    color: #e0e0e0;
-    padding: 20px 16px;
-    border-radius: 0;
-    min-height: 100vh;
+  if (!is.na(USL)) {
+    PmkU <- (USL - X50) / (X99865 - X50)
   }
-
-  .sidebar-panel label {
-    color: #999999;
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 3px;
+  if (!is.na(LSL)) {
+    PmkL <- (X50 - LSL) / (X50 - X0135)
   }
+  Pmk <- suppressWarnings(min(c(PmkU, PmkL), na.rm = TRUE))
+  if (is.infinite(Pmk)) Pmk <- NA_real_
+  
+  list(Pm = Pm, PmkU = PmkU, PmkL = PmkL, Pmk = Pmk,
+       X0135 = X0135, X50 = X50, X99865 = X99865)
+}
 
-  .sidebar-panel .form-control {
-    background-color: #222222;
-    border: 1px solid #333333;
-    color: #e0e0e0;
-    border-radius: 4px;
-    font-size: 0.88rem;
+# 8.2.2 Approximate (1 - alpha) confidence intervals for normal-based indices
+calc_ci_normal <- function(n, Pm, PmkU, PmkL, Pmk, alpha) {
+  z <- qnorm(1 - alpha / 2)
+  
+  ci_Pm <- c(NA_real_, NA_real_)
+  if (!is.na(Pm)) {
+    chi_lo <- qchisq(alpha / 2, df = n - 1)
+    chi_hi <- qchisq(1 - alpha / 2, df = n - 1)
+    ci_Pm <- Pm * sqrt(c(chi_lo, chi_hi) / (n - 1))
   }
-
-  .sidebar-panel .form-control:focus {
-    background-color: #2a2a2a;
-    border-color: #666666;
-    color: white;
-    box-shadow: 0 0 0 2px rgba(255,255,255,0.1);
+  
+  ci_generic <- function(P) {
+    if (is.na(P)) return(c(NA_real_, NA_real_))
+    se <- sqrt(1 / (9 * n) + P^2 / (2 * (n - 1)))
+    P + c(-1, 1) * z * se
   }
+  
+  list(
+    Pm   = ci_Pm,
+    PmkU = ci_generic(PmkU),
+    PmkL = ci_generic(PmkL),
+    Pmk  = ci_generic(Pmk)
+  )
+}
 
-  .sidebar-section {
-    margin-bottom: 16px;
-  }
+# Estimated proportion out of specification (equivalent to Table A.1 lookup,
+# computed directly from the normal distribution rather than via the table).
+calc_prop_out_of_spec <- function(xbar, s, LSL, USL) {
+  p_low  <- if (!is.na(LSL)) pnorm(LSL, mean = xbar, sd = s) else 0
+  p_high <- if (!is.na(USL)) pnorm(USL, mean = xbar, sd = s, lower.tail = FALSE) else 0
+  p_low + p_high
+}
 
-  .sidebar-section-label {
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: #ffffff;
-    font-weight: 700;
-    margin-bottom: 10px;
-    border-bottom: 1px solid #333333;
-    padding-bottom: 5px;
-  }
+# 7.3.4 Suggested number of classes (~sqrt(n), rounded, bounded 5-20 per 7.3.4)
+suggest_classes <- function(n) {
+  k <- round(sqrt(n))
+  min(max(k, 5), 20)
+}
 
-  .sidebar-panel hr {
-    border-color: #333333;
-    margin: 14px 0;
-  }
+# ---------------------------------------------------------------------
+# Example data — ISO 22514-3:2020 Table 1 ("Example 1", diameter in mm),
+# reconstructed in true sample sequence (1 to 100). The table in the
+# standard is laid out as 10 sample-blocks (1-10, 11-20, ..., 91-100)
+# printed side by side, so the values below have been re-ordered from
+# the table's row-major print layout back into chronological order —
+# important because the run chart (7.2) depends on sequence, not just
+# the value set.
+# ---------------------------------------------------------------------
+EXAMPLE_DATA <- c(10.0069, 10.0075, 10.0075, 10.0076, 10.0066, 10.0075, 10.0075, 10.0071, 10.0074, 10.0070,
+                  10.0073, 10.0070, 10.0075, 10.0071, 10.0075, 10.0069, 10.0072, 10.0069, 10.0068, 10.0075,
+                  10.0073, 10.0073, 10.0064, 10.0070, 10.0068, 10.0062, 10.0071, 10.0072, 10.0072, 10.0069,
+                  10.0069, 10.0070, 10.0077, 10.0073, 10.0075, 10.0074, 10.0070, 10.0067, 10.0069, 10.0069,
+                  10.0070, 10.0067, 10.0067, 10.0072, 10.0074, 10.0063, 10.0073, 10.0069, 10.0069, 10.0075,
+                  10.0071, 10.0068, 10.0065, 10.0065, 10.0069, 10.0066, 10.0076, 10.0072, 10.0075, 10.0072,
+                  10.0068, 10.0072, 10.0074, 10.0066, 10.0067, 10.0072, 10.0068, 10.0066, 10.0071, 10.0070,
+                  10.0072, 10.0075, 10.0066, 10.0076, 10.0070, 10.0072, 10.0064, 10.0076, 10.0079, 10.0075,
+                  10.0077, 10.0078, 10.0074, 10.0069, 10.0073, 10.0071, 10.0068, 10.0071, 10.0071, 10.0066,
+                  10.0069, 10.0073, 10.0069, 10.0072, 10.0072, 10.0069, 10.0066, 10.0071, 10.0070, 10.0068)
 
-  .sidebar-panel .btn-primary {
-    background-color: #ffffff;
-    border-color: #ffffff;
-    color: #111111;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    font-size: 0.82rem;
-    padding: 8px;
-    width: 100%;
-  }
+EXAMPLE_DATA_TEXT <- paste(sprintf("%.4f", EXAMPLE_DATA), collapse = "\n")
 
-  .sidebar-panel .btn-primary:hover {
-    background-color: #dddddd;
-    border-color: #dddddd;
-    color: #111111;
-  }
-
-  .sidebar-panel .btn-default {
-    background-color: #222222;
-    border-color: #444444;
-    color: #cccccc;
-    font-size: 0.78rem;
-    width: 100%;
-    margin-bottom: 8px;
-  }
-
-  .sidebar-panel .btn-default:hover {
-    background-color: #333333;
-    color: #ffffff;
-  }
-
-  .sidebar-hint {
-    font-size: 0.7rem;
-    color: #777777;
-    margin-top: 4px;
-    line-height: 1.4;
-  }
-
-  .main-panel {
-    padding: 20px 24px;
-  }
-
-  /* Result Cards */
-  .result-cards {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-  }
-
-  .result-card {
-    flex: 1;
-    min-width: 140px;
-    background: white;
-    border-radius: 6px;
-    padding: 16px 18px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.10);
-    border-top: 4px solid #111111;
-  }
-
-  .result-card.pass {
-    border-top-color: #1a7a3a;
-  }
-
-  .result-card.fail {
-    border-top-color: #c0392b;
-  }
-
-  .result-card.neutral {
-    border-top-color: #555555;
-  }
-
-  .result-card .card-label {
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: #777777;
-    font-weight: 700;
-    margin-bottom: 6px;
-  }
-
-  .result-card .card-value {
-    font-size: 1.6rem;
-    font-weight: 700;
-    color: #111111;
-    line-height: 1.1;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .result-card .card-badge {
-    display: inline-block;
-    margin-top: 6px;
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-  }
-
-  .badge-pass {
-    background-color: #e6f4ec;
-    color: #1a7a3a;
-  }
-
-  .badge-fail {
-    background-color: #fdecea;
-    color: #c0392b;
-  }
-
-  .badge-neutral {
-    background-color: #eeeeee;
-    color: #555555;
-  }
-
-  /* Info bar */
-  .info-bar {
-    background: white;
-    border-radius: 6px;
-    padding: 10px 18px;
-    margin-bottom: 20px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-    display: flex;
-    gap: 32px;
-    flex-wrap: wrap;
-    align-items: center;
-    border-left: 4px solid #111111;
-  }
-
-  .info-bar-item .info-label {
-    font-size: 0.65rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: #999999;
-    font-weight: 700;
-  }
-
-  .info-bar-item .info-value {
-    font-size: 0.88rem;
-    color: #111111;
-    font-weight: 600;
-  }
-
-  /* Plot cards */
-  .plot-card {
-    background: white;
-    border-radius: 6px;
-    padding: 16px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.10);
-    margin-bottom: 20px;
-  }
-
-  .plot-card-title {
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: #777777;
-    font-weight: 700;
-    margin-bottom: 12px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #eeeeee;
-  }
-
-  /* Interpretation card */
-  .interp-card {
-    background: white;
-    border-radius: 6px;
-    padding: 18px 20px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.10);
-    margin-bottom: 20px;
-  }
-
-  .interp-card-title {
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: #777777;
-    font-weight: 700;
-    margin-bottom: 12px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #eeeeee;
-  }
-
-  .interp-pass  { color: #1a7a3a; font-weight: 600; }
-  .interp-warn  { color: #c07020; font-weight: 600; }
-  .interp-fail  { color: #c0392b; font-weight: 600; }
-  .interp-meta  { color: #999999; font-size: 0.82rem; margin-top: 8px; }
-
-  .plot-legend {
-    display: flex;
-    gap: 24px;
-    justify-content: center;
-    padding-top: 10px;
-    margin-top: 6px;
-    border-top: 1px solid #eeeeee;
-    font-size: 0.75rem;
-    color: #555555;
-  }
-
-  .plot-legend .legend-item {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-  }
-
-  .legend-line {
-    display: inline-block;
-    width: 26px;
-    height: 0;
-    border-top-width: 2.5px;
-  }
-
-  .legend-spec   { border-top-style: dashed; border-top-color: #c0392b; }
-  .legend-mean   { border-top-style: solid;  border-top-color: #111111; }
-  .legend-target { border-top-style: dotted; border-top-color: #1a7a3a; }
-
-  .sidebar-panel .btn-file {
-    background-color: #222222;
-    border-color: #444444;
-    color: #cccccc;
-    font-size: 0.78rem;
-  }
-"
-
-# =============================================================================
+# ---------------------------------------------------------------------
 # UI
-# =============================================================================
+# ---------------------------------------------------------------------
 
 ui <- fluidPage(
-  
-  tags$head(tags$style(HTML(css))),
-  
-  tags$div(class = "title-bar",
-           tags$h2("Machine Performance Study"),
-           tags$p("Calibration Support LLC")
-  ),
-  
-  fluidRow(
-    
-    # Sidebar
-    column(3,
-           tags$div(class = "sidebar-panel",
-                    
-                    tags$div(class = "sidebar-section",
-                             tags$div(class = "sidebar-section-label", "Study Setup"),
-                             textInput("process_name", "Process Name",
-                                       value = "Shaft Diameter - Machine Performance Study")
-                    ),
-                    
-                    tags$div(class = "sidebar-section",
-                             tags$div(class = "sidebar-section-label", "Specification Limits"),
-                             numericInput("usl",    "Upper Spec Limit (USL)", value = 25.10, step = 0.01),
-                             numericInput("lsl",    "Lower Spec Limit (LSL)", value = 24.90, step = 0.01),
-                             numericInput("target", "Target Value",            value = 25.00, step = 0.01)
-                    ),
-                    
-                    tags$div(class = "sidebar-section",
-                             tags$div(class = "sidebar-section-label", "Environment"),
-                             numericInput("temperature", "Temperature (°C)", value = 20.3, step = 0.1),
-                             numericInput("humidity",    "Humidity (%RH)",   value = 48.2, step = 0.1)
-                    ),
-                    
-                    tags$div(class = "sidebar-section",
-                             tags$div(class = "sidebar-section-label", "Acceptance Threshold"),
-                             numericInput("threshold", "Min Pm / Pmk", value = 1.67, step = 0.01),
-                             tags$p("Default 1.67. Some customers require 2.00.", class = "sidebar-hint")
-                    ),
-                    
-                    tags$div(class = "sidebar-section",
-                             tags$div(class = "sidebar-section-label", "Part Measurements"),
-                             tags$p("Paste comma-separated values (up to 50):", class = "sidebar-hint"),
-                             textAreaInput("part_data", label = NULL, rows = 6,
-                                           value = "25.01,24.98,25.02,25.00,24.99,25.03,24.97,25.01,25.04,24.98,25.02,25.00,24.99,25.01,24.96,25.03,25.00,24.98,25.02,25.01,24.99,25.03,24.97,25.00,25.02,24.98,25.01,25.03,24.99,25.00,25.02,24.97,25.01,24.99,25.03,25.00,24.98,25.02,25.01,24.99,25.00,25.03,24.98,25.01,24.97,25.02,25.00,24.99,25.01,25.02"),
-                             tags$p(textOutput("part_count_label"), class = "sidebar-hint")
-                    ),
-                    
-                    actionButton("run", "Calculate", class = "btn-primary"),
-                    
-                    hr(),
-                    
-                    tags$div(class = "sidebar-section",
-                             tags$div(class = "sidebar-section-label", "Save / Load"),
-                             downloadButton("save_json", "Save as JSON", class = "btn-default"),
-                             fileInput("load_json", NULL, accept = ".json",
-                                       placeholder = "Upload JSON",
-                                       buttonLabel = "Upload JSON"),
-                             tags$p("Save inputs to JSON and reload later.", class = "sidebar-hint")
-                    )
-           )
+  titlePanel("ISO 22514-3:2020 — Machine Performance Study"),
+  sidebarLayout(
+    sidebarPanel(
+      width = 3,
+      h4("1. Data input (Clause 6)"),
+      radioButtons("input_mode", NULL,
+                   choices = c("Paste values" = "paste", "Upload CSV" = "file"),
+                   selected = "paste"),
+      conditionalPanel(
+        condition = "input.input_mode == 'paste'",
+        textAreaInput("pasted_data", "Measured values (one per line, or comma-separated)",
+                      value = EXAMPLE_DATA_TEXT, rows = 8),
+        helpText(em("Pre-populated with ISO 22514-3:2020 Table 1 (Example 1, diameter in mm, n = 100). Replace with your own data, or use the buttons below.")),
+        fluidRow(
+          column(6, actionButton("load_example", "Load example data", width = "100%")),
+          column(6, actionButton("clear_data", "Clear", width = "100%"))
+        ),
+        br()
+      ),
+      conditionalPanel(
+        condition = "input.input_mode == 'file'",
+        fileInput("file_data", "CSV file (single numeric column)", accept = ".csv"),
+        checkboxInput("file_header", "File has header row", value = TRUE)
+      ),
+      hr(),
+      h4("2. Specification limits"),
+      helpText("Leave a limit blank if one-sided."),
+      numericInput("LSL", "Lower specification limit (L)", value = 10.006),
+      numericInput("USL", "Upper specification limit (U)", value = 10.008),
+      hr(),
+      h4("3. Distribution model (Clause 7.5 / 7.6)"),
+      selectInput("dist_model", NULL,
+                  choices = c("Normal (7.6.2)" = "normal",
+                              "Percentile method — skewed/bimodal (7.6.1)" = "percentile")),
+      numericInput("conf_level", "Confidence level for indices (8.2)",
+                   value = 0.90, min = 0.5, max = 0.999, step = 0.01),
+      hr(),
+      h4("4. Study metadata (Clause 8.1 report)"),
+      textInput("meta_place", "Place of study"),
+      textInput("meta_persons", "Persons performing study / taking measurements"),
+      textInput("meta_dates", "Dates / times (start, finish, interruptions)"),
+      textInput("meta_machine", "Machine reference number", value = "Example machine"),
+      textInput("meta_part", "Part name and reference number", value = "ISO 22514-3:2020 Table 1, Example 1"),
+      textInput("meta_characteristic", "Characteristic measured (incl. units)", value = "Diameter (mm)"),
+      textInput("meta_ambient", "Ambient conditions"),
+      textAreaInput("meta_nonstandard", "Non-standard conditions", rows = 2),
+      hr(),
+      actionButton("analyze", "Analyze", class = "btn-primary", width = "100%")
     ),
-    
-    # Main panel
-    column(9,
-           tags$div(class = "main-panel",
-                    
-                    uiOutput("result_cards"),
-                    uiOutput("info_bar"),
-                    
-                    fluidRow(
-                      column(6,
-                             tags$div(class = "plot-card",
-                                      tags$div(class = "plot-card-title", "Distribution vs. Specification"),
-                                      plotOutput("histogram", height = "300px"),
-                                      tags$div(class = "plot-legend",
-                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-spec"),   "USL / LSL"),
-                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-mean"),   "Mean"),
-                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-target"), "Target")
-                                      )
-                             )
-                      ),
-                      column(6,
-                             tags$div(class = "plot-card",
-                                      tags$div(class = "plot-card-title", "Run Chart — Parts in Sequence"),
-                                      plotOutput("runchart", height = "300px"),
-                                      tags$div(class = "plot-legend",
-                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-spec"),   "USL / LSL"),
-                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-mean"),   "Mean"),
-                                               tags$div(class = "legend-item", tags$span(class = "legend-line legend-target"), "Target")
-                                      )
-                             )
-                      )
-                    ),
-                    
-                    tags$div(class = "interp-card",
-                             tags$div(class = "interp-card-title", "Interpretation"),
-                             uiOutput("interpretation")
-                    )
-           )
+    mainPanel(
+      width = 9,
+      tabsetPanel(
+        id = "tabs",
+        tabPanel("Pre-checks",
+                 br(),
+                 htmlOutput("precheck_text")),
+        tabPanel("Run Chart (7.2)",
+                 br(),
+                 plotOutput("run_chart", height = "420px"),
+                 htmlOutput("run_chart_note")),
+        tabPanel("Histogram (7.3)",
+                 br(),
+                 plotOutput("histogram", height = "420px"),
+                 verbatimTextOutput("summary_stats")),
+        tabPanel("Probability Plot (7.4)",
+                 br(),
+                 plotOutput("prob_plot", height = "420px"),
+                 htmlOutput("normality_text")),
+        tabPanel("Performance Indices (7.6 / 8.2)",
+                 br(),
+                 tableOutput("indices_table"),
+                 htmlOutput("indices_notes")),
+        tabPanel("Report (8.1)",
+                 br(),
+                 downloadButton("download_report", "Download full report (.txt)"),
+                 downloadButton("download_data", "Download data + results (.csv)"),
+                 br(), br(),
+                 verbatimTextOutput("report_preview"))
+      )
     )
   )
 )
 
-# =============================================================================
-# SERVER
-# =============================================================================
+# ---------------------------------------------------------------------
+# Server
+# ---------------------------------------------------------------------
 
 server <- function(input, output, session) {
   
-  parts <- reactive({
-    req(input$part_data)
-    vals <- suppressWarnings(
-      as.numeric(unlist(strsplit(trimws(input$part_data), "[,\\s]+")))
-    )
-    vals[!is.na(vals)]
+  # ---- Load example / clear buttons (paste mode only) ----
+  observeEvent(input$load_example, {
+    updateTextAreaInput(session, "pasted_data", value = EXAMPLE_DATA_TEXT)
+    updateNumericInput(session, "LSL", value = 10.006)
+    updateNumericInput(session, "USL", value = 10.008)
   })
   
-  output$part_count_label <- renderText({
-    paste0(length(parts()), " of 50 parts entered")
+  observeEvent(input$clear_data, {
+    updateTextAreaInput(session, "pasted_data", value = "")
   })
   
-  calcs <- eventReactive(input$run, {
-    p <- parts()
-    shiny::validate(shiny::need(length(p) >= 2, "Enter at least 2 part measurements to calculate."))
-    usl   <- input$usl
-    lsl   <- input$lsl
-    thr   <- input$threshold
-    x_bar <- mean(p)
-    s     <- sd(p)
-    pm    <- (usl - lsl) / (6 * s)
-    pmk   <- min(
-      (usl - x_bar) / (3 * s),
-      (x_bar - lsl) / (3 * s)
-    )
-    list(parts = p, n = length(p), x_bar = x_bar, s = s,
-         pm = pm, pmk = pmk,
-         pm_pass = pm >= thr, pmk_pass = pmk >= thr)
-  }, ignoreNULL = FALSE)
-  
-  # Result cards
-  output$result_cards <- renderUI({
-    c <- calcs(); req(c)
-    
-    make_card <- function(label, value, badge_text = NULL, card_class = "neutral") {
-      badge <- if (!is.null(badge_text)) {
-        badge_class <- if (card_class == "pass") "badge-pass" else if (card_class == "fail") "badge-fail" else "badge-neutral"
-        tags$div(class = paste("card-badge", badge_class), badge_text)
-      }
-      tags$div(class = paste("result-card", card_class),
-               tags$div(class = "card-label", label),
-               tags$div(class = "card-value", value),
-               badge
-      )
-    }
-    
-    tags$div(class = "result-cards",
-             make_card("Pm",      round(c$pm,    3), ifelse(c$pm_pass,  "Pass", "Fail"), ifelse(c$pm_pass,  "pass", "fail")),
-             make_card("Pmk",     round(c$pmk,   3), ifelse(c$pmk_pass, "Pass", "Fail"), ifelse(c$pmk_pass, "pass", "fail")),
-             make_card("Mean",    round(c$x_bar, 4), NULL, "neutral"),
-             make_card("Std Dev", round(c$s,     4), NULL, "neutral"),
-             make_card("n",       c$n,               NULL, "neutral")
-    )
-  })
-  
-  # Info bar
-  output$info_bar <- renderUI({
-    c <- calcs(); req(c)
-    
-    item <- function(label, value) {
-      tags$div(class = "info-bar-item",
-               tags$div(class = "info-label", label),
-               tags$div(class = "info-value", value)
-      )
-    }
-    
-    tags$div(class = "info-bar",
-             item("Process",     input$process_name),
-             item("USL",         input$usl),
-             item("LSL",         input$lsl),
-             item("Target",      input$target),
-             item("Temperature", paste0(input$temperature, " °C")),
-             item("Humidity",    paste0(input$humidity, " %RH"))
-    )
-  })
-  
-  # Histogram
-  # Legend is placed BELOW the plot area (outside), horizontal, so it never
-  # overlaps the data. Extra bottom margin reserved via par(mar).
-  output$histogram <- renderPlot({
-    c <- calcs(); req(c)
-    p   <- c$parts
-    usl <- input$usl
-    lsl <- input$lsl
-    tgt <- input$target
-    pad <- (usl - lsl) * 0.15
-    
-    par(bg = "white", col.axis = "#555555", col.lab = "#111111",
-        col.main = "#111111", fg = "#555555",
-        mar = c(4, 4, 2, 2), family = "sans")
-    
-    hist(p, main = NULL, xlab = "Measured Value", ylab = "Frequency",
-         col = "#d9d9d9", border = "#111111",
-         xlim = c(lsl - pad, usl + pad))
-    
-    abline(v = usl,     col = "#c0392b", lwd = 2, lty = 2)
-    abline(v = lsl,     col = "#c0392b", lwd = 2, lty = 2)
-    abline(v = c$x_bar, col = "#111111", lwd = 2, lty = 1)
-    abline(v = tgt,     col = "#1a7a3a", lwd = 2, lty = 3)
-    
-    mtext(paste0("Pm = ", round(c$pm, 3), ifelse(c$pm_pass, "  PASS", "  FAIL"),
-                 "     Pmk = ", round(c$pmk, 3), ifelse(c$pmk_pass, "  PASS", "  FAIL")),
-          side = 3, line = 0.3, cex = 0.78, col = "#555555")
-  }, bg = "white")
-  
-  # Run chart
-  output$runchart <- renderPlot({
-    c <- calcs(); req(c)
-    p   <- c$parts
-    usl <- input$usl
-    lsl <- input$lsl
-    tgt <- input$target
-    pad <- (usl - lsl) * 0.15
-    
-    par(bg = "white", col.axis = "#555555", col.lab = "#111111",
-        col.main = "#111111", fg = "#555555",
-        mar = c(4, 4, 2, 2), family = "sans")
-    
-    plot(seq_along(p), p, type = "b", pch = 19, col = "#111111",
-         main = NULL, xlab = "Part Number", ylab = "Measured Value",
-         ylim = c(lsl - pad, usl + pad))
-    
-    abline(h = usl,     col = "#c0392b", lwd = 2, lty = 2)
-    abline(h = lsl,     col = "#c0392b", lwd = 2, lty = 2)
-    abline(h = c$x_bar, col = "#666666", lwd = 2, lty = 1)
-    abline(h = tgt,     col = "#1a7a3a", lwd = 2, lty = 3)
-    
-    mtext(paste0("Temp: ", input$temperature, "°C   RH: ", input$humidity, "%RH"),
-          side = 3, line = 0.3, cex = 0.78, col = "#999999")
-  }, bg = "white")
-  
-  # Interpretation
-  output$interpretation <- renderUI({
-    c <- calcs(); req(c)
-    bias <- round(c$x_bar - input$target, 4)
-    gap  <- round(c$pm - c$pmk, 4)
-    
-    if (c$pm_pass && c$pmk_pass) {
-      msg <- tags$p(class = "interp-pass",
-                    paste0("Both Pm and Pmk meet the acceptance threshold of ", input$threshold,
-                           ". Machine is accepted."))
-    } else if (c$pm_pass && !c$pmk_pass) {
-      msg <- tags$p(class = "interp-warn",
-                    paste0("Pm passes but Pmk fails. Spread is adequate but the mean is offset from target by ",
-                           bias, " units. Investigate machine offset or zero adjustment before re-running the study."))
+  # ---- Parse the data whenever Analyze is clicked ----
+  raw_values <- eventReactive(input$analyze, {
+    if (input$input_mode == "paste") {
+      txt <- input$pasted_data
+      validate(need(nchar(trimws(txt)) > 0, "Please paste some data."))
+      vals <- unlist(strsplit(txt, "[,\n\r\t; ]+"))
+      vals <- suppressWarnings(as.numeric(vals[nchar(trimws(vals)) > 0]))
     } else {
-      msg <- tags$p(class = "interp-fail",
-                    paste0("Both Pm and Pmk fail. Machine variation is too large for the tolerance window. ",
-                           "Investigate machine condition, tooling, fixturing, and environmental factors."))
+      validate(need(!is.null(input$file_data), "Please upload a CSV file."))
+      df <- read.csv(input$file_data$datapath, header = input$file_header)
+      vals <- suppressWarnings(as.numeric(df[[1]]))
     }
-    
-    tagList(
-      msg,
-      tags$p(class = "interp-meta",
-             paste0("Pm vs Pmk gap: ", gap, ". A larger gap indicates greater mean shift from target. ",
-                    "A gap near zero means the process is well centered."))
-    )
+    vals <- vals[!is.na(vals)]
+    validate(need(length(vals) > 0, "No numeric values could be parsed from the input."))
+    vals
   })
   
-  # Save JSON
-  output$save_json <- downloadHandler(
-    filename = function() {
-      paste0(gsub("[^a-zA-Z0-9]", "_", input$process_name), "_",
-             format(Sys.time(), "%Y%m%d_%H%M%S"), ".json")
-    },
-    content = function(file) {
-      study <- list(
-        process_name = input$process_name,
-        usl          = input$usl,
-        lsl          = input$lsl,
-        target       = input$target,
-        temperature  = input$temperature,
-        humidity     = input$humidity,
-        threshold    = input$threshold,
-        part_data    = input$part_data,
-        saved_at     = format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-      )
-      jsonlite::write_json(study, file, pretty = TRUE, auto_unbox = TRUE)
+  limits <- eventReactive(input$analyze, {
+    LSL <- input$LSL
+    USL <- input$USL
+    validate(need(!(is.na(LSL) && is.na(USL)),
+                  "Please provide at least one specification limit (LSL and/or USL)."))
+    if (!is.na(LSL) && !is.na(USL)) {
+      validate(need(USL > LSL, "USL must be greater than LSL."))
     }
+    list(LSL = LSL, USL = USL)
+  })
+  
+  n_val <- reactive(length(raw_values()))
+  
+  # ---- Clause 5: pre-condition checks ----
+  output$precheck_text <- renderUI({
+    req(raw_values())
+    n <- n_val()
+    msgs <- c()
+    if (n < 30) {
+      msgs <- c(msgs, sprintf(
+        "<b style='color:red'>FAIL:</b> n = %d. Clause 5.5 / Scope: this document is not applicable below 30 observations. Do not use the results of this study to conclude machine acceptance.", n))
+    } else if (n < 100) {
+      msgs <- c(msgs, sprintf(
+        "<b style='color:orange'>CAUTION:</b> n = %d. Clause 5.2 recommends 100 parts (at least 100 if a non-normal distribution is expected); audits may use as few as 50. Confidence intervals will be wider than the ~&#177;12%% (90%% confidence) benchmark quoted for n = 100.", n))
+    } else {
+      msgs <- c(msgs, sprintf(
+        "<b style='color:green'>OK:</b> n = %d meets the recommended minimum of 100 observations (Clause 5.2).", n))
+    }
+    msgs <- c(msgs, "<hr>",
+              "<b>Reminders from Clause 5:</b>",
+              "<ul>",
+              "<li>All factors other than the machine itself should be held constant (same operator, same batch of material, etc.) (5.1).</li>",
+              "<li>Input materials should conform to specification and come from the same batch (5.3).</li>",
+              "<li>The measurement system should have combined standard uncertainty u<sub>MS</sub> &lt; 10% of the process standard deviation, and expanded uncertainty U<sub>MP</sub> &le; 15% of tolerance (5.4).</li>",
+              "<li>The run should be uninterrupted; if stopped, either re-run or use only sufficient, still-repeatable data, with never fewer than 30 consecutive results (5.5).</li>",
+              "<li>This method does not apply where tool wear or autocorrelation is expected, or for very high-speed automatic data capture (Scope, Clause 1).</li>",
+              "<li>Each fixture/cavity/stream in a multi-stream setup should be treated as a separate machine (5.6).</li>",
+              "</ul>")
+    HTML(paste(msgs, collapse = "<br>"))
+  })
+  
+  # ---- Clause 7.2: Run chart ----
+  output$run_chart <- renderPlot({
+    req(raw_values())
+    x <- raw_values()
+    df <- data.frame(i = seq_along(x), value = x)
+    ggplot(df, aes(x = i, y = value)) +
+      geom_line(color = "steelblue") +
+      geom_point(color = "steelblue", size = 1.5) +
+      geom_hline(yintercept = mean(x), linetype = "dashed", color = "black") +
+      geom_hline(yintercept = mean(x) + 3 * sd(x), linetype = "dotted", color = "red") +
+      geom_hline(yintercept = mean(x) - 3 * sd(x), linetype = "dotted", color = "red") +
+      labs(title = "Run Chart", x = "Observation number (i)", y = "Measured value",
+           subtitle = "Dashed = mean; dotted = mean +/- 3s (reference lines only)") +
+      theme_minimal(base_size = 13)
+  })
+  
+  output$run_chart_note <- renderUI({
+    HTML(paste(
+      "<p><b>Clause 7.2 guidance:</b> Inspect this plot for evidence of instability",
+      "(drift, step changes, trends, or outliers) before proceeding. If the pattern",
+      "suggests an unauthorized adjustment or mixed data, stop and consider repeating",
+      "the study or analysing the data in separate segments (see ISO 7870-1 / -2 for",
+      "formal control-chart based tests).</p>"
+    ))
+  })
+  
+  # ---- Clause 7.3: Histogram / summary ----
+  output$histogram <- renderPlot({
+    req(raw_values())
+    x <- raw_values()
+    k <- suggest_classes(length(x))
+    ggplot(data.frame(x = x), aes(x = x)) +
+      geom_histogram(bins = k, fill = "steelblue", color = "white") +
+      labs(title = "Histogram", x = "Measured value", y = "Absolute frequency (f)",
+           subtitle = sprintf("Suggested classes (~sqrt(n), bounded 5-20): %d", k)) +
+      theme_minimal(base_size = 13)
+  })
+  
+  output$summary_stats <- renderPrint({
+    req(raw_values())
+    x <- raw_values()
+    cat(sprintf("n              = %d\n", length(x)))
+    cat(sprintf("Mean (Xbar)    = %.6g\n", mean(x)))
+    cat(sprintf("Std dev (S)    = %.6g\n", sd(x)))
+    cat(sprintf("Min / Max      = %.6g / %.6g\n", min(x), max(x)))
+    cat("\nPer 7.3.3: report mean to one more decimal place than the raw data\n")
+    cat("resolution, and standard deviation to three more digits.\n")
+  })
+  
+  # ---- Clause 7.4: Probability plot + normality check ----
+  output$prob_plot <- renderPlot({
+    req(raw_values())
+    x <- raw_values()
+    qq <- qqnorm(x, plot.it = FALSE)
+    df <- data.frame(theoretical = qq$x, sample = qq$y)
+    ggplot(df, aes(x = theoretical, y = sample)) +
+      geom_point(color = "steelblue") +
+      geom_qq_line(aes(sample = sample), color = "red") +
+      labs(title = "Normal Probability Plot",
+           x = "Theoretical quantiles", y = "Sample quantiles (measured value)") +
+      theme_minimal(base_size = 13)
+  })
+  
+  output$normality_text <- renderUI({
+    req(raw_values())
+    x <- raw_values()
+    msgs <- c()
+    if (length(x) >= 3 && length(x) <= 5000) {
+      sw <- shapiro.test(x)
+      msgs <- c(msgs, sprintf(
+        "Shapiro-Wilk normality test: W = %.4f, p-value = %.4g.", sw$statistic, sw$p.value))
+      if (sw$p.value < 0.05) {
+        msgs <- c(msgs, "<b style='color:orange'>The data depart significantly from normality (p &lt; 0.05).</b> Per Clause 7.3.2, applying normal-distribution formulas (7.6.2) to non-normal data can produce inaccurate results. Inspect the probability plot for skew (7.5.1) or bimodality (7.5.2), and consider the percentile-based method (7.6.1) instead.")
+      } else {
+        msgs <- c(msgs, "No significant departure from normality detected (p &ge; 0.05); the straight-line criterion of 7.3.4 can reasonably be applied.")
+      }
+    } else {
+      msgs <- c(msgs, "Shapiro-Wilk test requires 3-5000 observations; skipped. Rely on visual inspection of the probability plot.")
+    }
+    msgs <- c(msgs, "<br><i>Per 7.5.3 / 7.5.4: if the data are truncated or censored, the indices in Clause 7.6 should not be applied — seek specialist advice.</i>")
+    HTML(paste(msgs, collapse = "<br>"))
+  })
+  
+  # ---- Clause 7.6 / 8.2: Indices ----
+  results <- eventReactive(input$analyze, {
+    x <- raw_values()
+    lim <- limits()
+    xbar <- mean(x)
+    s <- sd(x)
+    alpha <- 1 - input$conf_level
+    
+    if (input$dist_model == "normal") {
+      idx <- calc_indices_normal(xbar, s, lim$LSL, lim$USL)
+      ci <- calc_ci_normal(length(x), idx$Pm, idx$PmkU, idx$PmkL, idx$Pmk, alpha)
+      prop <- calc_prop_out_of_spec(xbar, s, lim$LSL, lim$USL)
+      list(model = "normal", xbar = xbar, s = s, idx = idx, ci = ci, prop = prop)
+    } else {
+      idx <- calc_indices_percentile(x, lim$LSL, lim$USL)
+      # CI formulas for non-normal indices are not given in closed form by the
+      # standard (8.2.3 notes this requires establishing the specific
+      # distribution); CIs are therefore not reported for the percentile method.
+      list(model = "percentile", xbar = xbar, s = s, idx = idx,
+           X0135 = idx$X0135, X50 = idx$X50, X99865 = idx$X99865)
+    }
+  })
+  
+  output$indices_table <- renderTable({
+    r <- results()
+    fmt <- function(v) if (is.na(v)) "-" else sprintf("%.3f", v)
+    fmt_ci <- function(ci) if (all(is.na(ci))) "-" else sprintf("[%.3f, %.3f]", ci[1], ci[2])
+    
+    if (r$model == "normal") {
+      data.frame(
+        Index = c("Pm", "Pmk (U)", "Pmk (L)", "Pmk (min)"),
+        Estimate = c(fmt(r$idx$Pm), fmt(r$idx$PmkU), fmt(r$idx$PmkL), fmt(r$idx$Pmk)),
+        `CI (approx.)` = c(fmt_ci(r$ci$Pm), fmt_ci(r$ci$PmkU), fmt_ci(r$ci$PmkL), fmt_ci(r$ci$Pmk)),
+        check.names = FALSE
+      )
+    } else {
+      data.frame(
+        Index = c("Pm", "Pmk (U)", "Pmk (L)", "Pmk (min)"),
+        Estimate = c(fmt(r$idx$Pm), fmt(r$idx$PmkU), fmt(r$idx$PmkL), fmt(r$idx$Pmk)),
+        `CI (approx.)` = c("n/a (8.2.3)", "n/a (8.2.3)", "n/a (8.2.3)", "n/a (8.2.3)"),
+        check.names = FALSE
+      )
+    }
+  })
+  
+  output$indices_notes <- renderUI({
+    r <- results()
+    lim <- limits()
+    prop_txt <- if (r$model == "normal") {
+      sprintf("Estimated proportion out of specification (from the fitted normal distribution): %.4g", r$prop)
+    } else {
+      sprintf("Percentile estimates used: X(0.135%%) = %.6g, X(50%%) = %.6g, X(99.865%%) = %.6g",
+              r$X0135, r$X50, r$X99865)
+    }
+    HTML(paste0(
+      "<p><b>Mean (Xbar):</b> ", sprintf("%.6g", r$xbar),
+      " &nbsp; <b>Std dev (S):</b> ", sprintf("%.6g", r$s), "</p>",
+      "<p>", prop_txt, "</p>",
+      "<p><i>Interpretation (Clause 9):</i> acceptance/unacceptance decisions should be made ",
+      "using the width of the confidence interval, not the point estimate alone. Minimum ",
+      "acceptable index values should be agreed between supplier and customer ahead of the study.</p>"
+    ))
+  })
+  
+  # ---- Clause 8.1: Report ----
+  build_report_text <- function() {
+    x <- raw_values()
+    lim <- limits()
+    r <- results()
+    n <- length(x)
+    
+    lines <- c(
+      "ISO 22514-3:2020 MACHINE PERFORMANCE STUDY REPORT",
+      strrep("=", 50),
+      "",
+      sprintf("Place of study: %s", input$meta_place),
+      sprintf("Persons: %s", input$meta_persons),
+      sprintf("Dates/times: %s", input$meta_dates),
+      sprintf("Machine reference number: %s", input$meta_machine),
+      sprintf("Part name/reference number: %s", input$meta_part),
+      sprintf("Characteristic measured: %s", input$meta_characteristic),
+      sprintf("Specification: LSL = %s, USL = %s",
+              ifelse(is.na(lim$LSL), "(none)", lim$LSL),
+              ifelse(is.na(lim$USL), "(none)", lim$USL)),
+      sprintf("Ambient conditions: %s", input$meta_ambient),
+      sprintf("Non-standard conditions: %s", input$meta_nonstandard),
+      "",
+      "DATA SUMMARY",
+      strrep("-", 50),
+      sprintf("n = %d", n),
+      sprintf("Mean (Xbar) = %.6g", r$xbar),
+      sprintf("Std dev (S) = %.6g", r$s),
+      sprintf("Distribution model used: %s", r$model),
+      ""
+    )
+    
+    if (n < 30) {
+      lines <- c(lines, "*** WARNING: n < 30 - this document's methods are not applicable. ***", "")
+    } else if (n < 100) {
+      lines <- c(lines, "NOTE: n < 100 (Clause 5.2 recommends 100); confidence intervals are wider than the 90% / ~+-12% benchmark for n = 100.", "")
+    }
+    
+    fmt <- function(v) if (is.na(v)) "n/a" else sprintf("%.4f", v)
+    lines <- c(lines,
+               "MACHINE PERFORMANCE INDICES",
+               strrep("-", 50),
+               sprintf("Pm       = %s", fmt(r$idx$Pm)),
+               sprintf("Pmk (U)  = %s", fmt(r$idx$PmkU)),
+               sprintf("Pmk (L)  = %s", fmt(r$idx$PmkL)),
+               sprintf("Pmk(min) = %s", fmt(r$idx$Pmk)),
+               ""
+    )
+    
+    if (r$model == "normal") {
+      fmt_ci <- function(ci) if (all(is.na(ci))) "n/a" else sprintf("[%.4f, %.4f]", ci[1], ci[2])
+      lines <- c(lines,
+                 sprintf("Confidence level: %.1f%%", input$conf_level * 100),
+                 sprintf("CI for Pm       = %s", fmt_ci(r$ci$Pm)),
+                 sprintf("CI for Pmk (U)  = %s", fmt_ci(r$ci$PmkU)),
+                 sprintf("CI for Pmk (L)  = %s", fmt_ci(r$ci$PmkL)),
+                 sprintf("CI for Pmk(min) = %s", fmt_ci(r$ci$Pmk)),
+                 sprintf("Estimated proportion out of specification = %.6g", r$prop),
+                 ""
+      )
+    } else {
+      lines <- c(lines,
+                 sprintf("X(0.135%%) = %.6g, X(50%%) = %.6g, X(99.865%%) = %.6g", r$X0135, r$X50, r$X99865),
+                 "Confidence intervals not reported for the percentile method (see 8.2.3: ",
+                 "requires establishing the specific non-normal distribution).",
+                 ""
+      )
+    }
+    
+    lines <- c(lines,
+               "RAW DATA",
+               strrep("-", 50),
+               paste(x, collapse = ", ")
+    )
+    
+    paste(lines, collapse = "\n")
+  }
+  
+  output$report_preview <- renderPrint({
+    req(results())
+    cat(build_report_text())
+  })
+  
+  output$download_report <- downloadHandler(
+    filename = function() sprintf("machine_performance_report_%s.txt", Sys.Date()),
+    content = function(file) writeLines(build_report_text(), file)
   )
   
-  # Load JSON
-  observeEvent(input$load_json, {
-    req(input$load_json)
-    tryCatch({
-      study <- jsonlite::fromJSON(input$load_json$datapath)
-      updateTextInput(session,    "process_name", value = study$process_name)
-      updateNumericInput(session, "usl",          value = study$usl)
-      updateNumericInput(session, "lsl",          value = study$lsl)
-      updateNumericInput(session, "target",       value = study$target)
-      updateNumericInput(session, "temperature",  value = study$temperature)
-      updateNumericInput(session, "humidity",     value = study$humidity)
-      updateNumericInput(session, "threshold",    value = study$threshold)
-      updateTextAreaInput(session,"part_data",    value = study$part_data)
-    }, error = function(e) {
-      showNotification("Failed to load JSON. Check the file format.", type = "error")
-    })
-  })
+  output$download_data <- downloadHandler(
+    filename = function() sprintf("machine_performance_data_%s.csv", Sys.Date()),
+    content = function(file) {
+      x <- raw_values()
+      write.csv(data.frame(observation = seq_along(x), value = x), file, row.names = FALSE)
+    }
+  )
 }
 
 shinyApp(ui, server)
