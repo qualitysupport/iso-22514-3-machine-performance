@@ -10,7 +10,8 @@
 #   Clause 5  - Pre-condition checks (n >= 30, warning if n < 100)
 #   Clause 6  - Data collection / traceability
 #   Clause 7.2 - Run chart
-#   Clause 7.3 - Histogram / tally chart, pattern check
+#   Clause 7.3 - Histogram / tally chart, pattern check (with fitted
+#                normal curve and spec limit overlay)
 #   Clause 7.4 - Probability plot (+ normality test)
 #   Clause 7.5 - Special cases (skew / bimodal) flagged, percentile method
 #   Clause 7.6 - Machine performance indices (Pm, PmkU, PmkL, Pmk)
@@ -327,16 +328,41 @@ server <- function(input, output, session) {
     ))
   })
   
-  # ---- Clause 7.3: Histogram / summary ----
+  # ---- Clause 7.3: Histogram, with fitted normal curve and spec limit overlay ----
   output$histogram <- renderPlot({
     req(raw_values())
-    x <- raw_values()
-    k <- suggest_classes(length(x))
-    ggplot(data.frame(x = x), aes(x = x)) +
-      geom_histogram(bins = k, fill = "steelblue", color = "white") +
+    x   <- raw_values()
+    lim <- limits()
+    k   <- suggest_classes(length(x))
+    
+    h        <- hist(x, breaks = k, plot = FALSE)
+    binwidth <- diff(h$breaks)[1]
+    n        <- length(x)
+    xbar     <- mean(x)
+    s        <- sd(x)
+    y_max    <- max(h$counts) * 1.15
+    
+    curve_df    <- data.frame(cx = seq(min(x), max(x), length.out = 300))
+    curve_df$cy <- dnorm(curve_df$cx, mean = xbar, sd = s) * n * binwidth
+    
+    p <- ggplot(data.frame(x = x), aes(x = x)) +
+      geom_histogram(breaks = h$breaks, fill = "steelblue", color = "white") +
+      geom_line(data = curve_df, aes(x = cx, y = cy), color = "firebrick",
+                linewidth = 1, linetype = "dashed", inherit.aes = FALSE) +
+      coord_cartesian(ylim = c(0, y_max)) +
       labs(title = "Histogram", x = "Measured value", y = "Absolute frequency (f)",
-           subtitle = sprintf("Suggested classes (~sqrt(n), bounded 5-20): %d", k)) +
+           subtitle = sprintf("Classes: %d  |  dashed curve = fitted normal (mean, sd)", k)) +
       theme_minimal(base_size = 13)
+    
+    if (!is.na(lim$LSL)) {
+      p <- p + geom_vline(xintercept = lim$LSL, color = "black", linewidth = 1) +
+        annotate("text", x = lim$LSL, y = y_max * 0.95, label = "LSL", hjust = -0.1, color = "black", size = 4)
+    }
+    if (!is.na(lim$USL)) {
+      p <- p + geom_vline(xintercept = lim$USL, color = "black", linewidth = 1) +
+        annotate("text", x = lim$USL, y = y_max * 0.95, label = "USL", hjust = 1.1, color = "black", size = 4)
+    }
+    p
   })
   
   output$summary_stats <- renderPrint({
