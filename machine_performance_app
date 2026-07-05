@@ -18,6 +18,16 @@
 #   Clause 8   - Reporting, confidence intervals, proportion out of spec
 #
 # Required packages: shiny, ggplot2, DT
+#
+# Author: Dan Lay Jr. | Calibration Support LLC
+# www.calibrationsupport.com | linkedin.com/in/dlayjr
+#
+# Disclaimer: This tool implements calculation methods described in
+# ISO 22514-3:2020 but is not affiliated with, endorsed by, or reviewed
+# by ISO. It does not reproduce the standard itself; consult the official
+# ISO 22514-3:2020 document (available for purchase from ISO or your
+# national standards body) for authoritative guidance. Provided as-is,
+# for educational and reference use.
 ########################################################################
 
 library(shiny)
